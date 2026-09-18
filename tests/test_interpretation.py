@@ -134,3 +134,145 @@ def test_invalid_no_op_semantics_are_rejected() -> None:
 
     with pytest.raises(LLMInterpretationError):
         interpreter.interpret(request_with_notes(["No energy changes today."]))
+
+
+def valid_directive() -> dict:
+    return {
+        "note_index": 0,
+        "applies": True,
+        "directive_type": "solar_reduction",
+        "structured_adjustment": {"hours": [13, 14], "factor": 0.2},
+        "explanation": "Solar availability is reduced.",
+    }
+
+
+def assert_invalid_llm_output(payload: dict, notes: list[str] | None = None) -> None:
+    fake_client = FakeClient(json.dumps(payload, allow_nan=True))
+    interpreter = GeminiDirectiveInterpreter(
+        api_key="test-key", model="test-model", client=fake_client
+    )
+    with pytest.raises(LLMInterpretationError):
+        interpreter.interpret(request_with_notes(notes or ["Solar maintenance."]))
+
+
+def test_duplicate_note_index_is_rejected() -> None:
+    first = valid_directive()
+    second = valid_directive()
+    second["explanation"] = "A second result with the same index."
+    assert_invalid_llm_output(
+        {"directive_interpretation": [first, second]},
+        ["First note.", "Second note."],
+    )
+
+
+def test_missing_interpretation_is_rejected() -> None:
+    assert_invalid_llm_output({"directive_interpretation": []})
+
+
+def test_note_indexes_must_follow_original_note_order() -> None:
+    first = valid_directive()
+    first["note_index"] = 1
+    second = valid_directive()
+    second["note_index"] = 0
+    assert_invalid_llm_output(
+        {"directive_interpretation": [first, second]},
+        ["First note.", "Second note."],
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "hours"),
+    [
+        ("hour_24", [13, 24]),
+        ("negative_hour", [-1, 13]),
+        ("unsorted_hours", [14, 13]),
+        ("duplicate_hours", [13, 13]),
+        ("non_integer_hour", [13.0, 14]),
+        ("empty_hours", []),
+    ],
+)
+def test_invalid_hour_arrays_are_rejected(case: str, hours: list[int]) -> None:
+    directive = valid_directive()
+    directive["structured_adjustment"]["hours"] = hours
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_solar_factor_above_one_is_rejected() -> None:
+    directive = valid_directive()
+    directive["structured_adjustment"]["factor"] = 1.5
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_unsupported_directive_type_is_rejected() -> None:
+    directive = valid_directive()
+    directive["directive_type"] = "change_tariff"
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_reserve_above_battery_capacity_is_rejected() -> None:
+    directive = {
+        "note_index": 0,
+        "applies": True,
+        "directive_type": "minimum_battery_reserve",
+        "structured_adjustment": {"hours": [18, 19], "minimum_energy_kwh": 201},
+        "explanation": "Reserve request.",
+    }
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_no_op_with_applies_true_is_rejected() -> None:
+    directive = {
+        "note_index": 0,
+        "applies": True,
+        "directive_type": "no_op",
+        "structured_adjustment": None,
+        "explanation": "Incorrect no-op.",
+    }
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_non_no_op_with_applies_false_is_rejected() -> None:
+    directive = valid_directive()
+    directive["applies"] = False
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+def test_missing_adjustment_is_rejected() -> None:
+    directive = valid_directive()
+    directive["structured_adjustment"] = None
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+@pytest.mark.parametrize("max_grid_kwh", [-1, float("inf")])
+def test_invalid_max_grid_value_is_rejected(max_grid_kwh: float) -> None:
+    directive = {
+        "note_index": 0,
+        "applies": True,
+        "directive_type": "max_grid_window",
+        "structured_adjustment": {"hours": [18, 19], "max_grid_kwh": max_grid_kwh},
+        "explanation": "Grid cap.",
+    }
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+@pytest.mark.parametrize(
+    ("case", "field", "value"),
+    [
+        ("nan_factor", "factor", float("nan")),
+        ("infinite_factor", "factor", float("inf")),
+    ],
+)
+def test_nan_and_infinity_are_rejected(case: str, field: str, value: float) -> None:
+    directive = valid_directive()
+    directive["structured_adjustment"][field] = value
+    assert_invalid_llm_output({"directive_interpretation": [directive]})
+
+
+@pytest.mark.parametrize("case", ["missing_critical_field", "unexpected_critical_field"])
+def test_missing_or_unexpected_critical_fields_are_rejected(case: str) -> None:
+    directive = valid_directive()
+    if case == "missing_critical_field":
+        del directive["explanation"]
+    else:
+        directive["unexpected_critical_field"] = "not allowed"
+    assert_invalid_llm_output({"directive_interpretation": [directive]})

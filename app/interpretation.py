@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from .directive_validation import DirectiveValidationError, validate_llm_interpretation
 from .schemas import OptimizeEnergyRequest, OperatorNoteInterpretationResult
 
 
@@ -89,17 +90,13 @@ class GeminiDirectiveInterpreter:
             if not response.text:
                 raise LLMInterpretationError("Gemini returned an empty response")
             result = OperatorNoteInterpretationResult.model_validate_json(response.text)
-            expected_indices = list(range(len(request.operator_notes)))
-            actual_indices = [
-                directive.note_index for directive in result.directive_interpretation
-            ]
-            if actual_indices != expected_indices:
-                raise LLMInterpretationError(
-                    "Gemini response must contain one directive per note in note_index order"
-                )
-            return result
+            return validate_llm_interpretation(result, request)
         except LLMInterpretationError:
             raise
+        except DirectiveValidationError as exc:
+            raise LLMInterpretationError(
+                "LLM output failed deterministic directive validation"
+            ) from exc
         except Exception as exc:
             raise LLMInterpretationError(
                 "Gemini directive interpretation failed"

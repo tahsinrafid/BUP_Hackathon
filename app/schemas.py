@@ -5,7 +5,14 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 
 def _finite_non_negative(value: float, field_name: str) -> float:
@@ -100,7 +107,7 @@ BatteryAction = Literal["charge", "discharge", "idle"]
 class HoursAdjustment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    hours: list[int] = Field(min_length=1)
+    hours: list[StrictInt] = Field(min_length=1)
 
     @field_validator("hours")
     @classmethod
@@ -152,7 +159,7 @@ StructuredAdjustment = (
 class DirectiveInterpretation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    note_index: int = Field(ge=0)
+    note_index: StrictInt = Field(ge=0)
     applies: bool
     directive_type: DirectiveType
     structured_adjustment: StructuredAdjustment | None
