@@ -1,14 +1,27 @@
 """HTTP entrypoint for the initial GridWise service."""
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from .interpretation import GeminiDirectiveInterpreter, LLMInterpretationError
+from .replay_validator import PlanValidationError
 from .schemas import OptimizeEnergyRequest, OperatorNoteInterpretationResult
 
 app = FastAPI(
     title="GridWise Energy Optimizer",
     version="0.1.0",
 )
+
+
+@app.exception_handler(PlanValidationError)
+async def handle_plan_validation_error(
+    _request: Request, _exc: PlanValidationError
+) -> JSONResponse:
+    """Never expose an invalid replayed plan or internal solver diagnostics."""
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "optimization plan validation failed"},
+    )
 
 
 @app.get("/health")

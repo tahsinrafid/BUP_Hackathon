@@ -23,6 +23,10 @@ class OptimizationError(RuntimeError):
     """The deterministic optimization problem could not be solved."""
 
 
+class DirectiveOverlapError(OptimizationError):
+    """An organizer-undefined directive combination was supplied."""
+
+
 @dataclass(frozen=True)
 class OptimizationResult:
     """The solved schedule and recalculated summary values."""
@@ -43,6 +47,7 @@ def _effective_constraints(
     grid_cap = [float("inf")] * 24
     no_charge_hours: set[int] = set()
     no_discharge_hours: set[int] = set()
+    solar_reduction_hours: set[int] = set()
 
     for directive in directives:
         if not directive.applies or directive.structured_adjustment is None:
@@ -52,7 +57,13 @@ def _effective_constraints(
         if directive.directive_type == "solar_reduction":
             assert isinstance(adjustment, SolarReductionAdjustment)
             for hour in adjustment.hours:
-                effective_solar[hour] *= adjustment.factor
+                if hour in solar_reduction_hours:
+                    raise DirectiveOverlapError(
+                        "overlapping solar_reduction directives are not defined "
+                        "by the official specification"
+                    )
+                solar_reduction_hours.add(hour)
+                effective_solar[hour] = request.hours[hour].solar_kwh * adjustment.factor
         elif directive.directive_type == "minimum_battery_reserve":
             assert isinstance(adjustment, MinimumBatteryReserveAdjustment)
             for hour in adjustment.hours:
@@ -167,9 +178,22 @@ def optimize_energy_schedule(
         )
     )
     peak_grid = _clean(max(entry.grid_kwh for entry in plan))
-    return OptimizationResult(
+    result = OptimizationResult(
         hourly_plan=plan,
         total_grid_kwh=total_grid,
         total_cost_bdt=total_cost,
         peak_grid_kwh=peak_grid,
     )
+    # Keep the post-solve check separate from model construction so the returned
+    # schedule is independently replayed before any caller can treat it as valid.
+    from .replay_validator import validate_solved_plan
+
+    validate_solved_plan(
+        request,
+        directives,
+        result.hourly_plan,
+        result.total_grid_kwh,
+        result.total_cost_bdt,
+        result.peak_grid_kwh,
+    )
+    return result
