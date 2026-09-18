@@ -54,11 +54,15 @@ def build_plan_summary(
 @app.post("/optimize-energy", response_model=OptimizeEnergyResponse)
 def optimize_energy(request: OptimizeEnergyRequest) -> OptimizeEnergyResponse:
     """Interpret notes once, then deterministically optimize and replay the plan."""
+    interpreter = GeminiDirectiveInterpreter()
     try:
-        interpretation = GeminiDirectiveInterpreter().interpret(request)
-    except LLMInterpretationError:
+        interpretation = interpreter.interpret(request)
+    except LLMInterpretationError as exc:
         logger.error(
-            "Operator-note interpretation failed for scenario_id=%s", request.scenario_id
+            "Operator-note interpretation failed for scenario_id=%s model=%s reason=%s",
+            request.scenario_id,
+            getattr(interpreter, "model", "unknown"),
+            str(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -115,9 +119,16 @@ def interpret_operator_notes(
     request: OptimizeEnergyRequest,
 ) -> OperatorNoteInterpretationResult:
     """Development endpoint for testing the LLM layer before optimization exists."""
+    interpreter = GeminiDirectiveInterpreter()
     try:
-        return GeminiDirectiveInterpreter().interpret(request)
+        return interpreter.interpret(request)
     except LLMInterpretationError as exc:
+        logger.error(
+            "Development interpretation failed for scenario_id=%s model=%s reason=%s",
+            request.scenario_id,
+            getattr(interpreter, "model", "unknown"),
+            str(exc),
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="operator-note interpretation is unavailable",

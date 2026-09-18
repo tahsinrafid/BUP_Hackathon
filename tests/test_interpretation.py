@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.interpretation import (
+    GEMINI_INTERPRETATION_SCHEMA,
     GeminiDirectiveInterpreter,
     LLMInterpretationError,
     build_interpretation_prompt,
@@ -54,6 +55,9 @@ def test_prompt_teaches_required_time_and_percentage_rules() -> None:
     )
     assert "battery capacity is\n200.0 kWh" in prompt
     assert "1 PM to 3 PM is [13, 14]" in prompt
+    assert '"from X until Y"' in prompt
+    assert '"between X and\nY"' in prompt
+    assert "never include the ending hour" in prompt
     assert '"reduced by 80%"' in prompt
     assert '"reduced to 80%"' in prompt
 
@@ -94,6 +98,7 @@ def test_interpreter_uses_one_structured_request_for_all_notes() -> None:
     )
 
     assert len(fake_client.models.calls) == 1
+    assert fake_client.models.calls[0]["config"].response_schema == GEMINI_INTERPRETATION_SCHEMA
     assert result.directive_interpretation[0].note_index == 0
     assert result.directive_interpretation[0].structured_adjustment.model_dump() == {
         "hours": [13, 14],
@@ -106,7 +111,7 @@ def test_interpreter_uses_one_structured_request_for_all_notes() -> None:
 def test_missing_llm_configuration_is_a_controlled_error(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.setattr("app.interpretation.load_dotenv", lambda: False)
+    monkeypatch.setattr("app.interpretation.load_dotenv", lambda **_kwargs: False)
     interpreter = GeminiDirectiveInterpreter(api_key="", model="")
     with pytest.raises(LLMInterpretationError, match="LLM_API_KEY"):
         interpreter.interpret(request_with_notes(["No energy changes today."]))
