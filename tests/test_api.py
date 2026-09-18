@@ -105,29 +105,6 @@ def test_battery_relationships_are_validated() -> None:
     assert response.status_code == 422
 
 
-def test_development_interpretation_endpoint(monkeypatch) -> None:
-    class FakeInterpreter:
-        def interpret(self, _request):
-            return OperatorNoteInterpretationResult.model_validate(
-                {
-                    "directive_interpretation": [
-                        {
-                            "note_index": 0,
-                            "applies": False,
-                            "directive_type": "no_op",
-                            "structured_adjustment": None,
-                            "explanation": "No scheduling impact.",
-                        }
-                    ]
-                }
-            )
-
-    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", FakeInterpreter)
-    response = client.post("/interpret-operator-notes", json=valid_request())
-    assert response.status_code == 200
-    assert response.json()["directive_interpretation"][0]["directive_type"] == "no_op"
-
-
 def test_optimize_energy_returns_controlled_error_for_llm_failure(monkeypatch) -> None:
     class FailingInterpreter:
         def interpret(self, _request):
@@ -168,3 +145,58 @@ def test_optimize_energy_returns_controlled_error_for_solver_failure(monkeypatch
 
     assert response.status_code == 500
     assert response.json() == {"detail": "optimization plan validation failed"}
+
+
+def test_malformed_json_returns_controlled_400() -> None:
+    response = client.post(
+        "/optimize-energy",
+        content=b'{"scenario_id":',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "malformed JSON request body"}
+
+
+def test_semantically_invalid_request_returns_controlled_422() -> None:
+    payload = valid_request()
+    payload["hours"] = payload["hours"][:-1]
+    response = client.post("/optimize-energy", json=payload)
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+
+
+def test_input_hours_may_arrive_unordered_and_are_normalized(monkeypatch) -> None:
+    class FakeInterpreter:
+        def interpret(self, _request):
+            return OperatorNoteInterpretationResult.model_validate(
+                {
+                    "directive_interpretation": [
+                        {
+                            "note_index": 0,
+                            "applies": False,
+                            "directive_type": "no_op",
+                            "structured_adjustment": None,
+                            "explanation": "No scheduling impact.",
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", FakeInterpreter)
+    payload = valid_request()
+    payload["hours"].reverse()
+    response = client.post("/optimize-energy", json=payload)
+    assert response.status_code == 200
+    assert [entry["hour"] for entry in response.json()["hourly_plan"]] == list(range(24))
+
+
+def test_unexpected_internal_error_is_controlled(monkeypatch) -> None:
+    class BrokenInterpreter:
+        def __init__(self):
+            raise RuntimeError("unexpected test failure")
+
+    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", BrokenInterpreter)
+    safe_client = TestClient(app, raise_server_exceptions=False)
+    response = safe_client.post("/optimize-energy", json=valid_request())
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}

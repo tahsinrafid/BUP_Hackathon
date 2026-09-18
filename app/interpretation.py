@@ -106,8 +106,13 @@ use applies=true. Hours are unique integer hours 0 through 23 in ascending order
 Use [start, end) for every time-range wording: include the start and exclude the
 end. This applies equally to "from X to Y", "from X until Y", and "between X and
 Y"; never include the ending hour. For example, 1 PM to 3 PM is [13, 14].
+Use standard clock conversion: 12 AM is hour 0 and 12 PM is hour 12. A one-hour
+window contains only its starting hour. Normalize ordinary fractions exactly.
 Solar factor is the usable fraction remaining: "reduced by 80%" and "80% reduction"
 mean factor 0.2; "reduced to 80%" and "80% remains" mean factor 0.8.
+The same distinction applies to fractions: "reduced by one-third" leaves factor
+2/3, while "reduced to one-third" means factor 1/3. Numbers or times alone do not
+make an unrelated note relevant to energy scheduling.
 Convert percentage battery reserves using battery capacity.
 
 Scenario context: 24-hour horizon (hours 0-23); battery capacity is

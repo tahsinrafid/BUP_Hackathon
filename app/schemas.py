@@ -26,7 +26,7 @@ def _finite_non_negative(value: float, field_name: str) -> float:
 class HourInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    hour: int
+    hour: StrictInt
     demand_kwh: float
     solar_kwh: float
     tariff_bdt_per_kwh: float
@@ -88,8 +88,9 @@ class OptimizeEnergyRequest(BaseModel):
     @model_validator(mode="after")
     def validate_hours(self) -> "OptimizeEnergyRequest":
         actual_hours = [entry.hour for entry in self.hours]
-        if actual_hours != list(range(24)):
-            raise ValueError("hours must contain exactly the integers 0 through 23 in order")
+        if sorted(actual_hours) != list(range(24)):
+            raise ValueError("hours must contain every integer from 0 through 23 exactly once")
+        self.hours.sort(key=lambda entry: entry.hour)
         return self
 
 
