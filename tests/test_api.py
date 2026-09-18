@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.main import app
+from app.interpretation import LLMInterpretationError
+from app.optimizer import OptimizationError
 from app.schemas import OperatorNoteInterpretationResult
 
 client = TestClient(app)
@@ -36,10 +38,36 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_optimize_energy_is_validated_before_placeholder() -> None:
+def test_optimize_energy_runs_the_complete_pipeline(monkeypatch) -> None:
+    class FakeInterpreter:
+        def interpret(self, _request):
+            return OperatorNoteInterpretationResult.model_validate(
+                {
+                    "directive_interpretation": [
+                        {
+                            "note_index": 0,
+                            "applies": False,
+                            "directive_type": "no_op",
+                            "structured_adjustment": None,
+                            "explanation": "No scheduling impact.",
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", FakeInterpreter)
     response = client.post("/optimize-energy", json=valid_request())
-    assert response.status_code == 501
-    assert response.json()["detail"] == "not implemented"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scenario_id"] == "TEST-001"
+    assert len(body["directive_interpretation"]) == 1
+    assert len(body["hourly_plan"]) == 24
+    assert body["total_grid_kwh"] == 2400
+    assert body["total_cost_bdt"] == 19200
+    assert body["peak_grid_kwh"] == max(
+        entry["grid_kwh"] for entry in body["hourly_plan"]
+    )
+    assert body["plan_summary"].startswith("Optimized the 24-hour schedule")
 
 
 def test_hours_must_be_exactly_zero_through_twenty_three() -> None:
@@ -98,3 +126,45 @@ def test_development_interpretation_endpoint(monkeypatch) -> None:
     response = client.post("/interpret-operator-notes", json=valid_request())
     assert response.status_code == 200
     assert response.json()["directive_interpretation"][0]["directive_type"] == "no_op"
+
+
+def test_optimize_energy_returns_controlled_error_for_llm_failure(monkeypatch) -> None:
+    class FailingInterpreter:
+        def interpret(self, _request):
+            raise LLMInterpretationError("provider failure")
+
+    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", FailingInterpreter)
+    response = client.post("/optimize-energy", json=valid_request())
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "operator-note interpretation is unavailable or invalid"
+    }
+
+
+def test_optimize_energy_returns_controlled_error_for_solver_failure(monkeypatch) -> None:
+    class FakeInterpreter:
+        def interpret(self, _request):
+            return OperatorNoteInterpretationResult.model_validate(
+                {
+                    "directive_interpretation": [
+                        {
+                            "note_index": 0,
+                            "applies": False,
+                            "directive_type": "no_op",
+                            "structured_adjustment": None,
+                            "explanation": "No scheduling impact.",
+                        }
+                    ]
+                }
+            )
+
+    def fail_optimizer(*_args, **_kwargs):
+        raise OptimizationError("infeasible")
+
+    monkeypatch.setattr(main, "GeminiDirectiveInterpreter", FakeInterpreter)
+    monkeypatch.setattr(main, "optimize_energy_schedule", fail_optimizer)
+    response = client.post("/optimize-energy", json=valid_request())
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "optimization plan validation failed"}
